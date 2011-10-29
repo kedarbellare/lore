@@ -7,6 +7,7 @@ import edu.stanford.nlp.pipeline.Annotation;
 import edu.stanford.nlp.pipeline.StanfordCoreNLP;
 import edu.stanford.nlp.util.CoreMap;
 import edu.umass.cs.iesl.lore.format.NonSplitFileInputFormat;
+import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.Text;
@@ -66,7 +67,18 @@ public class EntityMentionPatternExtractor {
                 if (CoreNLPUtils.isAllowedMentionNER(reprMention, sentences)) {
                     String reprPhrase = CoreNLPUtils.getMentionSpanForNER(reprMention, sentences);
                     String reprHeadNER = CoreNLPUtils.getNER(CoreNLPUtils.getHeadToken(reprMention, sentences));
-                    String reprEntityId = reprPhrase + "##" + CoreNLPUtils.getMentionUniqID(filePath, reprMention);
+                    String reprEntityId = reprPhrase.replace(' ', '_') + "##" + CoreNLPUtils.getMentionUniqID(filePath, reprMention);
+                    ArrayList<String> reprMentionDeps = new ArrayList<String>();
+                    for (CorefChain.CorefMention mention : chain.getCorefMentions()) {
+                        List<String> mentionDeps = CoreNLPUtils.getDependencies(mention, sentences, CoreNLPUtils.ALLOWED_DEP_TAGS, true);
+                        reprMentionDeps.addAll(mentionDeps);
+                    }
+                    if (reprMentionDeps.size() > 0) {
+                        String reprDepStr = StringUtils.join(reprMentionDeps, "|||");
+                        String tsvalue = reprPhrase + "\t" + reprEntityId + "\t" + reprHeadNER + "\t" + reprDepStr;
+                        context.write(key, new Text(tsvalue));
+                    }
+                    /*
                     for (CorefChain.CorefMention mention : chain.getCorefMentions()) {
                         List<String> mentionDeps = CoreNLPUtils.getDependencies(mention, sentences, CoreNLPUtils.ALLOWED_DEP_TAGS, true);
                         String phrase = CoreNLPUtils.getMentionSpanForNER(mention, sentences);
@@ -77,6 +89,7 @@ public class EntityMentionPatternExtractor {
                             context.write(key, new Text(tsvalue));
                         }
                     }
+                    */
                 }
             }
         }

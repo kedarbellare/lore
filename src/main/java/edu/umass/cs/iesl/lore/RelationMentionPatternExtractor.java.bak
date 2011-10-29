@@ -7,6 +7,7 @@ import edu.stanford.nlp.pipeline.Annotation;
 import edu.stanford.nlp.pipeline.StanfordCoreNLP;
 import edu.stanford.nlp.util.CoreMap;
 import edu.umass.cs.iesl.lore.format.NonSplitFileInputFormat;
+import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.Text;
@@ -18,10 +19,7 @@ import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.util.GenericOptionsParser;
 
 import java.io.IOException;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Properties;
+import java.util.*;
 
 /**
  * @author kedarb
@@ -71,25 +69,29 @@ public class RelationMentionPatternExtractor {
 
                 String srcEntityPhrase = CoreNLPUtils.getMentionSpanForNER(srcEntity, sentences);
                 String srcNER = CoreNLPUtils.getNER(CoreNLPUtils.getHeadToken(srcEntity, sentences));
-                String srcEntityId = srcEntityPhrase + "##" + CoreNLPUtils.getMentionUniqID(filePath, srcEntity);
-                for (CorefChain.CorefMention srcMention : srcChain.getCorefMentions()) {
-                    String srcMentionId = CoreNLPUtils.getMentionUniqID(filePath, srcMention);
-                    String srcPhrase = CoreNLPUtils.getMentionSpanForNER(srcMention, sentences);
+                String srcEntityId = srcEntityPhrase.replace(' ', '_') + "##" + CoreNLPUtils.getMentionUniqID(filePath, srcEntity);
+                for (int destChainNum : graph.keySet()) {
+                    CorefChain destChain = graph.get(destChainNum);
+                    CorefChain.CorefMention destEntity = destChain.getRepresentativeMention();
+                    if (!CoreNLPUtils.isAllowedMentionNER(destEntity, sentences))
+                        continue;
 
-                    for (int destChainNum : graph.keySet()) {
-                        CorefChain destChain = graph.get(destChainNum);
-                        CorefChain.CorefMention destEntity = destChain.getRepresentativeMention();
-                        if (!CoreNLPUtils.isAllowedMentionNER(destEntity, sentences))
-                            continue;
+                    String destEntityPhrase = CoreNLPUtils.getMentionSpanForNER(destEntity, sentences);
+                    String destNER = CoreNLPUtils.getNER(CoreNLPUtils.getHeadToken(destEntity, sentences));
+                    String destEntityId = destEntityPhrase.replace(' ', '_') + "##" + CoreNLPUtils.getMentionUniqID(filePath, destEntity);
+                    ArrayList<String> srcDestEdgeWalks = new ArrayList<String>();
+                    
+                    for (CorefChain.CorefMention srcMention : srcChain.getCorefMentions()) {
+                        String srcMentionId = CoreNLPUtils.getMentionUniqID(filePath, srcMention);
+                        String srcPhrase = CoreNLPUtils.getMentionSpanForNER(srcMention, sentences);
 
-                        String destEntityPhrase = CoreNLPUtils.getMentionSpanForNER(destEntity, sentences);
-                        String destNER = CoreNLPUtils.getNER(CoreNLPUtils.getHeadToken(destEntity, sentences));
-                        String destEntityId = destEntityPhrase + "##" + CoreNLPUtils.getMentionUniqID(filePath, destEntity);
                         for (CorefChain.CorefMention destMention : destChain.getCorefMentions()) {
                             String destMentionId = CoreNLPUtils.getMentionUniqID(filePath, destMention);
                             String destPhrase = CoreNLPUtils.getMentionSpanForNER(destMention, sentences);
                             List<String> edgeWalk = CoreNLPUtils.getEdgeWalk(srcMention, destMention, sentences, true);
                             if (edgeWalk.size() > 0) {
+                                srcDestEdgeWalks.add(StringUtils.join(edgeWalk, ""));
+                                /*
                                 StringBuilder edgeWalkBuff = new StringBuilder();
                                 for (String edge : edgeWalk) edgeWalkBuff.append(edge);
                                 String tsvalue = srcEntityPhrase + "\t" + srcEntityId + "\t" + srcNER + "\t" +
@@ -98,8 +100,16 @@ public class RelationMentionPatternExtractor {
                                         destEntityPhrase + "\t" + destEntityId + "\t" + destNER + "\t" +
                                         destPhrase + "\t" + destMentionId;
                                 context.write(key, new Text(tsvalue));
+                                */
                             }
                         }
+                    }
+
+                    if (srcDestEdgeWalks.size() > 0) {
+                        String srcDestEdgeWalkStr = StringUtils.join(srcDestEdgeWalks, "|||");
+                        String tsvalue = srcEntityPhrase + "\t" + srcEntityId + "\t" + srcNER + "\t" +
+                                srcDestEdgeWalkStr + "\t" + destEntityPhrase + "\t" + destEntityId + "\t" + destNER;
+                        context.write(key, new Text(tsvalue));
                     }
                 }
             }

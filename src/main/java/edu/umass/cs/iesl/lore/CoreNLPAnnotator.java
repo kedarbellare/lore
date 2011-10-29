@@ -4,16 +4,10 @@ import edu.stanford.nlp.dcoref.CorefChain;
 import edu.stanford.nlp.ling.CoreAnnotations;
 import edu.stanford.nlp.ling.CoreLabel;
 import edu.stanford.nlp.ling.CorefCoreAnnotations;
-import edu.stanford.nlp.ling.IndexedWord;
 import edu.stanford.nlp.pipeline.Annotation;
 import edu.stanford.nlp.pipeline.StanfordCoreNLP;
-import edu.stanford.nlp.trees.GrammaticalRelation;
-import edu.stanford.nlp.trees.Tree;
-import edu.stanford.nlp.trees.TreeCoreAnnotations;
-import edu.stanford.nlp.trees.semgraph.SemanticGraph;
-import edu.stanford.nlp.trees.semgraph.SemanticGraphCoreAnnotations;
-import edu.stanford.nlp.trees.semgraph.SemanticGraphEdge;
 import edu.stanford.nlp.util.CoreMap;
+import edu.stanford.nlp.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -38,19 +32,107 @@ public class CoreNLPAnnotator {
         return pipeline;
     }
 
-    public static String mention2String(CorefChain.CorefMention mention, List<CoreMap> sentences) {
-        CoreLabel headToken = CoreNLPUtils.getHeadToken(mention, sentences);
-        String mentionSpan = CoreNLPUtils.getMentionSpanForNER(mention, sentences);
-        List<String> headDependencies = CoreNLPUtils.getDependencies(mention, sentences, null, false);
-        // this is the text of the token
-        String word = CoreNLPUtils.getWord(headToken);
-        // this is the POS tag of the token
-        String pos = CoreNLPUtils.getTag(headToken);
-        // this is the NER label of the token
-        String ner = CoreNLPUtils.getNER(headToken);
-        return mentionSpan + " @" + mention.sentNum +
-                "[" + mention.startIndex + "," + mention.endIndex + ") headWord=" + word + " headTag=" + pos +
-                " headNer=" + ner + " relns=" + headDependencies;
+    /**
+     * Schema: [filePath] [reprEntityPhrase] [reprEntityId] [reprHeadNER] [reprDependencies]
+     * @param filePath
+     * @param docText
+     * @return
+     */
+    public List<String> getEntityMentionPatterns(String filePath, String docText) {
+        List<String> entPatterns = new ArrayList<String>();
+        Annotation document = new Annotation(docText);
+        pipeline.annotate(document);
+
+        // these are all the sentences in this document
+        // a CoreMap is essentially a Map that uses class objects as keys and has values with custom types
+        List<CoreMap> sentences = document.get(CoreAnnotations.SentencesAnnotation.class);
+
+        // This is the coreference link graph
+        // Each chain stores a set of mentions that link to each other,
+        // along with a method for getting the most representative mention
+        // Both sentence and token offsets start at 1!
+        Map<Integer, CorefChain> graph = document.get(CorefCoreAnnotations.CorefChainAnnotation.class);
+        for (int chainNum : graph.keySet()) {
+            CorefChain chain = graph.get(chainNum);
+            CorefChain.CorefMention reprMention = chain.getRepresentativeMention();
+            if (CoreNLPUtils.isAllowedMentionNER(reprMention, sentences)) {
+                String reprPhrase = CoreNLPUtils.getMentionSpanForNER(reprMention, sentences);
+                String reprHeadNER = CoreNLPUtils.getNER(CoreNLPUtils.getHeadToken(reprMention, sentences));
+                String reprEntityId = reprPhrase.replace(' ', '_') + "##" + CoreNLPUtils.getMentionUniqID(filePath, reprMention);
+                ArrayList<String> reprMentionDeps = new ArrayList<String>();
+                for (CorefChain.CorefMention mention : chain.getCorefMentions()) {
+                    List<String> mentionDeps = CoreNLPUtils.getDependencies(mention, sentences, CoreNLPUtils.ALLOWED_DEP_TAGS, true);
+                    reprMentionDeps.addAll(mentionDeps);
+                }
+                if (reprMentionDeps.size() > 0) {
+                    String reprDepStr = StringUtils.join(reprMentionDeps, "|||");
+                    String tsvalue = filePath + "\t" + reprPhrase + "\t" + reprEntityId + "\t" + reprHeadNER + "\t" + reprDepStr;
+                    entPatterns.add(tsvalue);
+                }
+            }
+        }
+
+        return entPatterns;
+    }
+
+    public List<String> getRelationMentionPatterns(String filePath, String docText) {
+        List<String> relPatterns = new ArrayList<String>();
+        Annotation document = new Annotation(docText);
+        pipeline.annotate(document);
+
+        // these are all the sentences in this document
+        // a CoreMap is essentially a Map that uses class objects as keys and has values with custom types
+        List<CoreMap> sentences = document.get(CoreAnnotations.SentencesAnnotation.class);
+
+        // This is the coreference link graph
+        // Each chain stores a set of mentions that link to each other,
+        // along with a method for getting the most representative mention
+        // Both sentence and token offsets start at 1!
+        java.util.Map<Integer, CorefChain> graph = document.get(CorefCoreAnnotations.CorefChainAnnotation.class);
+        for (int srcChainNum : graph.keySet()) {
+            CorefChain srcChain = graph.get(srcChainNum);
+            CorefChain.CorefMention srcEntity = srcChain.getRepresentativeMention();
+            if (!CoreNLPUtils.isAllowedMentionNER(srcEntity, sentences))
+                continue;
+
+            String srcEntityPhrase = CoreNLPUtils.getMentionSpanForNER(srcEntity, sentences);
+            String srcNER = CoreNLPUtils.getNER(CoreNLPUtils.getHeadToken(srcEntity, sentences));
+            String srcEntityId = srcEntityPhrase.replace(' ', '_') + "##" + CoreNLPUtils.getMentionUniqID(filePath, srcEntity);
+            for (int destChainNum : graph.keySet()) {
+                CorefChain destChain = graph.get(destChainNum);
+                CorefChain.CorefMention destEntity = destChain.getRepresentativeMention();
+                if (!CoreNLPUtils.isAllowedMentionNER(destEntity, sentences))
+                    continue;
+
+                String destEntityPhrase = CoreNLPUtils.getMentionSpanForNER(destEntity, sentences);
+                String destNER = CoreNLPUtils.getNER(CoreNLPUtils.getHeadToken(destEntity, sentences));
+                String destEntityId = destEntityPhrase.replace(' ', '_') + "##" + CoreNLPUtils.getMentionUniqID(filePath, destEntity);
+                ArrayList<String> srcDestEdgeWalks = new ArrayList<String>();
+
+                for (CorefChain.CorefMention srcMention : srcChain.getCorefMentions()) {
+                    // String srcMentionId = CoreNLPUtils.getMentionUniqID(filePath, srcMention);
+                    // String srcPhrase = CoreNLPUtils.getMentionSpanForNER(srcMention, sentences);
+
+                    for (CorefChain.CorefMention destMention : destChain.getCorefMentions()) {
+                        // String destMentionId = CoreNLPUtils.getMentionUniqID(filePath, destMention);
+                        // String destPhrase = CoreNLPUtils.getMentionSpanForNER(destMention, sentences);
+                        List<String> edgeWalk = CoreNLPUtils.getEdgeWalk(srcMention, destMention, sentences, true);
+                        if (edgeWalk.size() > 0) {
+                            srcDestEdgeWalks.add(StringUtils.join(edgeWalk, ""));
+                        }
+                    }
+                }
+
+                if (srcDestEdgeWalks.size() > 0) {
+                    String srcDestEdgeWalkStr = StringUtils.join(srcDestEdgeWalks, "|||");
+                    String tsvalue = filePath + "\t" + srcEntityPhrase + "\t" + srcEntityId + "\t" + srcNER + "\t" +
+                            srcDestEdgeWalkStr + "\t" + destEntityPhrase + "\t" + destEntityId + "\t" + destNER;
+                    relPatterns.add(tsvalue);
+                }
+            }
+        }
+
+        return relPatterns;
     }
 
     public static void main(String args[]) {
