@@ -4,7 +4,6 @@ import akka.actor.Actor._
 import akka.util.duration._
 import akka.actor.{Channel, Actor}
 import akka.dispatch.Dispatchers
-import akka.config.Supervision._
 
 import System.{currentTimeMillis => now}
 import org.riedelcastro.nurupo.HasLogger
